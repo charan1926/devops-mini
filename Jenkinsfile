@@ -10,15 +10,19 @@ pipeline {
   options { timestamps() }
 
   stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-        script {
-          env.TAG = sh(returnStdout: true, script: 'git rev-parse --short=7 HEAD').trim()
-        }
-        echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for ns ${env.K8S_NAMESPACE}"
+  stage('Checkout') {
+    steps {
+      checkout scm
+      script {
+        // get the commit short SHA
+        def sha = sh(returnStdout: true, script: 'git rev-parse --short=7 HEAD').trim()
+        env.TAG = sha
+        echo "Computed tag: ${env.TAG}"
       }
+      echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for namespace ${env.K8S_NAMESPACE}"
     }
+  }
+
 
     stage('Sanity: tools') {
       steps {
