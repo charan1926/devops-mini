@@ -10,16 +10,19 @@ pipeline {
 
   stages {
     stage('Checkout') {
-      steps {
-        // Replace 'checkout scm' with this:
-        git branch: 'main', url: 'https://github.com/charan1926/devops-mini.git'
-        sh 'git rev-parse --short=7 HEAD > .gitsha'
-        script {
-          env.SHORT_SHA = readFile('.gitsha').trim()
-          env.TAG = env.SHORT_SHA
-        }
-        echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for ns ${env.K8S_NAMESPACE}"
-      }
+  steps {
+    // if you're using "Pipeline script from SCM", keep `checkout scm`.
+    // if inline job, use the `git ...` line instead.
+    checkout scm
+    // git branch: 'main', url: 'https://github.com/charan1926/devops-mini.git'
+
+    script {
+      // robust: get short SHA directly into env.TAG
+      env.TAG = sh(returnStdout: true, script: 'git rev-parse --short=7 HEAD').trim()
+    }
+    echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for ns ${env.K8S_NAMESPACE}"
+  }
+}
     }
 
     stage('Sanity: kubectl on agent') {
