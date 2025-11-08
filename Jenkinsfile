@@ -12,7 +12,7 @@ pipeline {
     stage('Checkout') {
       steps {
         // Replace 'checkout scm' with this:
-        git branch: 'main', url: 'https://github.com/<YOUR_GH_USER>/devops-mini.git'
+        git branch: 'main', url: 'https://github.com/charan1926/devops-mini.git'
         sh 'git rev-parse --short=7 HEAD > .gitsha'
         script {
           env.SHORT_SHA = readFile('.gitsha').trim()
@@ -37,7 +37,7 @@ pipeline {
 
     stage('Login & Push') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
           sh '''
             echo "$PASS" | docker login -u "$USER" --password-stdin
             docker push ${DOCKER_IMAGE}:${TAG}
