@@ -11,14 +11,30 @@ pipeline {
 
   stages {
 
-    stage('Checkout') {
+stage('Checkout') {
       steps {
         checkout scm
+
         script {
-          // compute short SHA and store in env
-          env.TAG = sh(returnStdout: true, script: 'git rev-parse --short=7 HEAD').trim()
-          echo "Computed TAG = ${env.TAG}"
+          // prefer Jenkins’ own SCM env var; zero chance of .git weirdness
+          env.TAG = (env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : '').trim()
+
+          // fallback to git if GIT_COMMIT is missing
+          if (!env.TAG) {
+            env.TAG = sh(
+              script: 'git rev-parse --short=7 HEAD',
+              returnStdout: true
+            ).trim()
+          }
+
+          if (!env.TAG) {
+            error 'TAG is empty after checkout. Check SCM config.'
+          }
+
+          echo "Computed tag: ${env.TAG}"
         }
+
+        echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for namespace ${env.K8S_NAMESPACE}"
       }
     }
 
