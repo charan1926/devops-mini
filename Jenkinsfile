@@ -3,21 +3,19 @@ pipeline {
   options { timestamps(); skipDefaultCheckout(true) }
 
   environment {
-    DOCKER_IMAGE  = 'charan1926/devops-mini'
-    K8S_NAMESPACE = 'devops-mini'
-    TAG           = ''
+    DOCKER_IMAGE  = 'charan1926/devops-mini'   // your Docker Hub repo
+    K8S_NAMESPACE = 'devops-mini'              // target namespace
+    TAG           = ''                         // set after checkout
   }
 
   stages {
     stage('Checkout') {
       steps {
-        checkout scm
         script {
-          env.TAG = (env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : '').trim()
-          if (!env.TAG) {
-            env.TAG = sh(returnStdout: true, script: 'git rev-parse --short=7 HEAD').trim()
-          }
-          if (!env.TAG) { error 'TAG is empty after checkout. Check SCM config.' }
+          // checkout and use Jenkins-provided commit SHA (no git CLI dependency)
+          def scmVars = checkout scm
+          env.TAG = (scmVars?.GIT_COMMIT ?: env.GIT_COMMIT ?: '').take(7)
+          if (!env.TAG?.trim()) { error 'TAG is empty after checkout. Fix SCM config.' }
           echo "Computed tag: ${env.TAG}"
         }
         echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for namespace ${env.K8S_NAMESPACE}"
@@ -51,7 +49,6 @@ pipeline {
           set -e
           echo "Building ${DOCKER_IMAGE}:${TAG}"
           docker build -t ${DOCKER_IMAGE}:${TAG} .
-          # also tag latest for human-friendly pulls
           docker tag ${DOCKER_IMAGE}:${TAG} ${DOCKER_IMAGE}:latest
         '''
       }
@@ -74,12 +71,12 @@ pipeline {
       steps {
         sh '''
           set -e
-          # ensure both repo and tag are what we just built
+          # Replace placeholders in your base manifest
           sed -e "s|PLACEHOLDER_IMAGE|${DOCKER_IMAGE}|g" \
               -e "s|PLACEHOLDER_TAG|${TAG}|g" \
               k8s/app-deploy.yaml > k8s/app-deploy.rendered.yaml
           echo "Rendered image -> ${DOCKER_IMAGE}:${TAG}"
-          grep -E 'image:' k8s/app-deploy.rendered.yaml || true
+          grep -E '^\\s*image:' k8s/app-deploy.rendered.yaml || true
         '''
       }
     }
@@ -88,15 +85,15 @@ pipeline {
       steps {
         sh '''
           set -e
-          # create/ensure namespace first, then wait
+          # Ensure namespace exists and is usable
           kubectl apply -f k8s/namespace.yaml
-          kubectl wait --for=condition=Established --timeout=30s namespace/${K8S_NAMESPACE} || true
-          kubectl get ns ${K8S_NAMESPACE}
+          # best-effort wait (Established condition may not be set everywhere)
+          for i in 1 2 3; do kubectl get ns ${K8S_NAMESPACE} && break || sleep 2; done
 
           kubectl apply -n ${K8S_NAMESPACE} -f k8s/redis.yaml
           kubectl apply -n ${K8S_NAMESPACE} -f k8s/app-deploy.rendered.yaml
 
-          # adjust name if your Deployment differs from 'flask-app'
+          # adjust 'flask-app' if your Deployment metadata.name differs
           kubectl rollout status deploy/flask-app -n ${K8S_NAMESPACE} --timeout=180s
         '''
       }
@@ -106,7 +103,7 @@ pipeline {
       steps {
         sh '''
           set -e
-          # no -it in CI; run-and-clean one-shot pod
+          # no -it; run a one-shot curl pod and clean it up
           kubectl -n ${K8S_NAMESPACE} run curl --image=curlimages/curl:8.7.1 --restart=Never \
             --command -- sh -lc 'for i in 1 2 3; do curl -s http://flask-svc:5000/ | grep -q \\"status\\":\\"ok\\" && exit 0; sleep 2; done; exit 1'
           kubectl -n ${K8S_NAMESPACE} delete pod curl --ignore-not-found
@@ -124,7 +121,7 @@ pipeline {
       echo "Deployed ${env.DOCKER_IMAGE}:${env.TAG} to ${env.K8S_NAMESPACE}"
     }
     failure {
-      echo "Deployment failed. If rollout created a new replicaset, try: kubectl rollout undo deploy/flask-app -n ${env.K8S_NAMESPACE}"
+      echo "Deployment failed. If a new ReplicaSet was created, try: kubectl rollout undo deploy/flask-app -n ${env.K8S_NAMESPACE}"
     }
   }
 }
