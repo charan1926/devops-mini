@@ -1,34 +1,29 @@
 pipeline {
   agent any
+
   environment {
-    DOCKER_IMAGE  = "charan1926/devops-mini"
+    DOCKER_IMAGE  = "charan1926/devops-mini"   // change if your Docker Hub repo differs
     K8S_NAMESPACE = "devops-mini"
-    SHORT_SHA     = ""
-    TAG           = ""
+    TAG           = ""                         // computed at runtime
   }
+
   options { timestamps() }
 
   stages {
     stage('Checkout') {
-  steps {
-    // if you're using "Pipeline script from SCM", keep `checkout scm`.
-    // if inline job, use the `git ...` line instead.
-    checkout scm
-    // git branch: 'main', url: 'https://github.com/charan1926/devops-mini.git'
-
-    script {
-      // robust: get short SHA directly into env.TAG
-      env.TAG = sh(returnStdout: true, script: 'git rev-parse --short=7 HEAD').trim()
-    }
-    echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for ns ${env.K8S_NAMESPACE}"
-  }
-}
-    }
-
-    stage('Sanity: kubectl on agent') {
       steps {
+        checkout scm
+        script {
+          env.TAG = sh(returnStdout: true, script: 'git rev-parse --short=7 HEAD').trim()
+        }
+        echo "Building ${env.DOCKER_IMAGE}:${env.TAG} for ns ${env.K8S_NAMESPACE}"
+      }
+    }
+
+    stage('Sanity: tools') {
+      steps {
+        sh 'docker --version'
         sh 'kubectl version --client'
-        sh 'kubectl get ns | head -5'
       }
     }
 
@@ -49,36 +44,34 @@ pipeline {
       }
     }
 
-    stage('Render Manifests') {
+    stage('Deploy + Smoke Test (with kubeconfig cred)') {
       steps {
-        sh 'sed "s|PLACEHOLDER_TAG|${TAG}|g" k8s/app-deploy.yaml > k8s/app-deploy.rendered.yaml'
-      }
-    }
+        withCredentials([file(credentialsId: 'kubeconfig-devops-mini', variable: 'KUBECONFIG_FILE')]) {
+          sh '''
+            export KUBECONFIG="${KUBECONFIG_FILE}"
+            kubectl apply -f k8s/namespace.yaml
+            kubectl apply -f k8s/redis.yaml -n ${K8S_NAMESPACE}
+            sed "s|PLACEHOLDER_TAG|${TAG}|g" k8s/app-deploy.yaml > k8s/app-deploy.rendered.yaml
+            kubectl apply -f k8s/app-deploy.rendered.yaml -n ${K8S_NAMESPACE}
+            kubectl rollout status deploy/flask-app -n ${K8S_NAMESPACE} --timeout=120s
 
-    stage('Deploy to K8s') {
-      steps {
-        sh '''
-          kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/redis.yaml -n ${K8S_NAMESPACE}
-          kubectl apply -f k8s/app-deploy.rendered.yaml -n ${K8S_NAMESPACE}
-          kubectl rollout status deploy/flask-app -n ${K8S_NAMESPACE} --timeout=120s
-        '''
-      }
-    }
-
-    stage('Smoke Test (in-cluster)') {
-      steps {
-        sh '''
-          kubectl -n ${K8S_NAMESPACE} run curl --rm -it --image=curlimages/curl:8.7.1 --restart=Never -- \
-            sh -lc 'for i in 1 2 3; do curl -s http://flask-svc:5000/ | grep -q \\"status\\":\\"ok\\" && echo ok || exit 1; sleep 2; done'
-        '''
+            # in-cluster curl smoke test
+            kubectl -n ${K8S_NAMESPACE} run curl --rm -it --image=curlimages/curl:8.7.1 --restart=Never -- \
+              sh -lc 'for i in 1 2 3; do curl -s http://flask-svc:5000/ | grep -q \\"status\\":\\"ok\\" && echo ok || exit 1; sleep 2; done'
+          '''
+        }
       }
     }
   }
 
   post {
     success {
-      sh 'kubectl get pods,svc -n ${K8S_NAMESPACE}'
+      withCredentials([file(credentialsId: 'kubeconfig-devops-mini', variable: 'KUBECONFIG_FILE')]) {
+        sh '''
+          export KUBECONFIG="${KUBECONFIG_FILE}"
+          kubectl get pods,svc -n ${K8S_NAMESPACE}
+        '''
+      }
       echo "Deployed ${env.DOCKER_IMAGE}:${env.TAG} to ${env.K8S_NAMESPACE}"
     }
     failure {
@@ -86,4 +79,3 @@ pipeline {
     }
   }
 }
-
